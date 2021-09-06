@@ -3,104 +3,87 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <map>
+#include <functional>
 #include <variant>
 #include <charconv>
+#include <utility>
+#include <system_error>
 
-struct CoordinateArg {
-    int row = 0;
-    int column = 0;
-    CoordinateArg(int row = 0, int column = 0) : row{row}, column{column} {}
-};
+namespace {
+std::vector<std::string> split_string(std::string line, char del) {
+    std::vector<std::string> parsing_line;
+    int pos{};
+    std::string token;
 
-struct Calculation {
-    CoordinateArg arg1;
-    CoordinateArg arg2;
+    while (line.find(del) != std::string::npos) {
+        pos = line.find(del);
+        token = line.substr(0, pos);
+        parsing_line.push_back(token);
+        line.erase(0, pos + sizeof(del));
+    }
+    parsing_line.push_back(line);
+    return parsing_line;
+}
+}
+
+struct Expression {
+    std::variant<int64_t, std::string> left;
+    std::variant<int64_t, std::string> right;
     char op{};
 };
 
 class Cell {
 public:
-    int row{};
-    int column{};
-    std::string value;
+    int64_t row{};
+    int64_t column{};
+    int64_t value;
     std::string calculation;
 
-    Calculation calculate_value(std::vector<std::string> title_columns,
-                                std::vector<std::string> title_rows) {
+    Expression calculate_value() {
         if (calculation.empty()) {
             return {};
         }
         const std::string arithm_operation = "+-*/";
-        for (size_t i = 0; i < arithm_operation.size(); i++) {
-            if (calculation.find(arithm_operation[i]) != std::string::npos) {
-                int pos = calculation.find(arithm_operation[i]);
-                int row_arg{};
-                int column_arg{};
-
-                std::string token = calculation.substr(0, pos);
-                column_arg = column_search(title_columns, token);
-                token.erase(0, title_columns[column_arg].size());
-                row_arg = row_search(title_rows, token);
-                CoordinateArg arg1(row_arg, column_arg);
-
-                calculation.erase(0, pos + 1);
-                column_arg = column_search(title_columns, calculation);
-                calculation.erase(0, title_columns[column_arg].size());
-                row_arg = row_search(title_rows, calculation);
-                CoordinateArg arg2(row_arg, column_arg);
-
-                Calculation total{arg1, arg2, arithm_operation[i]};
-                return total;
+        for(auto &op : arithm_operation) {
+            size_t pos = calculation.find(op);
+            if(pos == std::string::npos) {
+                continue;
             }
+
+            std::string left = calculation.substr(0, pos);
+            std::string right = calculation.substr(pos + 1, calculation.size());
+            
+            return Expression {
+                select_value(left),
+                select_value(right),
+                op
+            };
+
         }
         return {};
     }
 
 private:
-    int column_search(std::vector<std::string> title_columns,
-                      std::string value_cell) {
-        for (size_t i = 1; i < title_columns.size(); i++) {
-            if (value_cell.find(title_columns[i]) != std::string::npos) {
-                return i;
-            }
+    std::variant <int64_t, std::string> select_value(std::string_view token){
+        int result{}; 
+        auto [ptr, ec] { std::from_chars(token.data(), token.data() + token.size(), result) };
+        if (ec == std::errc::invalid_argument){
+            return token.data();
+        }else{
+            return result;
         }
-        return {};
     }
 
-    int row_search(std::vector<std::string> title_rows,
-                   std::string value_cell) {
-        for (size_t i = 0; i < title_rows.size(); i++) {
-            if ((value_cell.find(title_rows[i]) != std::string::npos) &&
-                title_rows[i].size() == value_cell.size()) {
-                return ++i;
-            }
-        }
-        return {};
-    }
 };
 
 class Table{
     private:
-        std::vector <std::string> lines;
+        std::vector<std::string> lines;
         std::vector<std::string> title_column;
         std::vector<std::string> title_row;
         std::vector<Cell> cells;
         const char delimiter = ',';
-
-        std::vector <std::string> split_string(std::string line, char del){
-            std::vector <std::string> parsing_line;
-            int pos{};
-            std::string token;;
-
-            while (line.find(del) != std::string::npos) {
-                pos = line.find(del);
-                token = line.substr(0, pos);
-                parsing_line.push_back(token);
-                line.erase(0, pos + sizeof(del));
-            }
-            parsing_line.push_back(line);
-            return parsing_line;
-        }
         
         void split_title_column(){
             title_column = split_string(lines[0], delimiter);
@@ -118,13 +101,13 @@ class Table{
                 line = split_string(lines[i], delimiter);
                 for (size_t j = 1; j < line.size(); j++){
                     Cell cell;
-                    cell.column = j;
                     cell.row = i;
-                    if (line[j].find('=') != std::string::npos){
+                    cell.column = j;
+                    if (line[j][0] == '='){
                         cell.calculation = line[j];
                         cell.calculation.erase(0, 1);
                     }else{
-                        cell.value = line[j];
+                        std::from_chars(line[j].data(), line[j].data() + line[j].size(), cell.value);
                     }
                     cells.push_back(cell);
                 }
@@ -133,44 +116,72 @@ class Table{
 
         void get_values(){
             for (size_t i = 0; i < cells.size(); i++) {
-                if (cells[i].value.empty()) {
-                    Calculation val;
-                    val = cells[i].calculate_value(title_column, title_row);
-                    int val_arg1 {};
-                    int val_arg2 {};
-                    for (size_t j = 0; j < cells.size(); j++) {
-                        if (cells[j].column == val.arg1.column && cells[j].row == val.arg1.row) {
-                            std::from_chars(cells[j].value.data(), cells[j].value.data() + cells[j].value.size(), val_arg1);
-                        }
-                        if (cells[j].column == val.arg2.column && cells[j].row == val.arg2.row) {
-                            std::from_chars(cells[j].value.data(), cells[j].value.data() + cells[j].value.size(), val_arg2);
-                        }
-                    }
-                cells[i].value = std::to_string(calculate_values(val_arg1, val_arg2, val.op));
+                if (!cells[i].calculation.empty()) {
+                    Expression exp;
+                    exp = cells[i].calculate_value();
+                    int64_t left_value = get_value_arg(exp.left);
+                    int64_t right_value = get_value_arg(exp.right);
+                    cells[i].value = calculate_values(left_value, right_value, exp.op);
                 }
             }
-        } 
-        int calculate_values(int arg1, int arg2, char op){
-            int total_value {};
-            switch (op) {
-                case '+':
-                    total_value = arg1 + arg2;
-                    break;
-                case '-':
-                    total_value = arg1 - arg2;
-                    break;
-                case '*':
-                    total_value = arg1 * arg2;
-                    break;
-                case '/':
-                    total_value = arg1 / arg2;
-                    break;
-                default:
-                    std::cout << "unknown arithmetic operation\n";
-                    break;
+        }
+
+        int get_value_arg(std::variant<int64_t, std::string> val){
+            if (std::holds_alternative<int64_t>(val)){
+                return std::get<int64_t>(val);
+            }else{
+                return define_value(std::get<std::string>(val));
             }
-            return total_value;                
-        }     
+        }
+        
+        int64_t define_value(std::string str){
+            int64_t column_arg = column_search(str);
+            str.erase(0, title_column[column_arg].size());
+            int64_t row_arg = row_search(str);
+
+            for (size_t i = 0; i < cells.size(); i++) {
+                if (cells[i].column == column_arg && cells[i].row == row_arg) {
+                    return cells[i].value;
+                }
+            }          
+
+            std::cout<<"Error: cell \""<<str<<"\" does not exist\n";
+            exit(2);
+        }
+
+        int column_search(std::string_view value_cell) {
+            for (size_t i = 1; i < title_column.size(); i++) {
+                if (value_cell.find(title_column[i]) != std::string::npos) {
+                    return i;
+                }
+            }
+            return {};
+        }
+
+        int row_search(std::string_view value_cell) {
+            for (size_t i = 0; i < title_row.size(); i++) {
+                if (title_row[i].size() == value_cell.size()
+                    && (value_cell.find(title_row[i]) != std::string::npos)) {
+                    return ++i;
+                }
+            }
+            return {};
+        }
+
+        int calculate_values(int l, int r, char op) {
+            std::map<char, std::function<int()>> operations {
+                {'+', [&l, &r] { return l + r; }},
+                {'-', [&l, &r] { return l - r; }},
+                {'*', [&l, &r] { return l * r; }},
+                {'/', [&l, &r] { return l / r; }}
+            };
+            auto operation = operations.find(op);
+            if (operation == operations.end()) {
+                std::cout << "unknown arithmetic operation\n";
+                return 0;
+            }
+            return operation->second();
+        }
 
     public:
         static Table from(std::string_view path) {
@@ -188,7 +199,7 @@ class Table{
                 t.lines.push_back(line);
             }
 
-            t.output_file();
+            t.print_file_content();
 
             t.split_title_column();
             t.split_title_row();
@@ -201,7 +212,7 @@ class Table{
             return t;
         }
         
-        void output_file(){
+        void print_file_content(){
             for (size_t i = 0; i < lines.size(); i++){
                 std::cout<<lines[i]<<"\n";
             }
